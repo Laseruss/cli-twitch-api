@@ -1,24 +1,62 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
-	"os"
-
-	"github.com/joho/godotenv"
+	"net/http"
 )
 
-type Credentials struct {
-	clientId     string
-	clientSecret string
-	userToken    string
+var (
+	baseUrl = "https://api.twitch.tv/helix"
+)
+
+func main() {
+	client, err := newClient()
+	if err != nil {
+		panic(err)
+	}
+
+	liveStreams, err := client.getLiveFollowing()
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Printf("%+v\n", liveStreams.Data)
 }
 
-func setCredentials(env map[string]string) Credentials {
-	return Credentials{
-		clientId:     env["CLIENT_ID"],
-		clientSecret: env["CLIENT_SECRET"],
-		userToken:    env["USER_TOKEN"],
+func (c *Client) getUserID(username string) error {
+	url := fmt.Sprintf("%s/users?login=%s", baseUrl, username)
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return err
 	}
+
+	req.Header = http.Header{
+		"Authorization": {fmt.Sprintf("Bearer %s", c.credentials.accessToken)},
+		"Client-Id":     {c.credentials.clientId},
+	}
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	id := struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}{}
+
+	err = json.NewDecoder(resp.Body).Decode(&id)
+	if err != nil {
+		return err
+	}
+
+	c.credentials.userId = id.Data[0].ID
+
+	return nil
 }
 
 type Following struct {
@@ -31,94 +69,30 @@ type Following struct {
 	} `json:"data"`
 }
 
-func main() {
-	var myEnv map[string]string
-	myEnv, err := godotenv.Read()
+func (c *Client) getLiveFollowing() (*Following, error) {
+	url := fmt.Sprintf("%s/streams/followed?user_id=%s", baseUrl, c.credentials.userId)
+	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		fmt.Printf("could not load env variables: %s\n", err)
-		os.Exit(1)
-	}
-
-	credentials := setCredentials(myEnv)
-
-	fmt.Printf("%+v\n", credentials)
-
-}
-
-// Other stuffs
-
-type oauthToken struct {
-	AccessToken string `json:"access_token"`
-	ExpiresIn   int    `json:"expires_in"`
-	TokenType   string `json:"token_type"`
-}
-
-/*
-func (c *credentials) getOauthToken() error {
-	client := http.Client{}
-
-	body := strings.NewReader(fmt.Sprintf("client_id=%s&client_secret=%s&grant_type=client_credentials", c.id, c.secret))
-	req, err := http.NewRequest("POST", "https://id.twitch.tv/oauth2/token", body)
-	if err != nil {
-		return err
+		return nil, err
 	}
 
 	req.Header = http.Header{
-		"Content-Type": {"application/x-www-form-urlencoded"},
+		"Authorization": {fmt.Sprintf("Bearer %s", c.credentials.accessToken)},
+		"Client-Id":     {c.credentials.clientId},
 	}
-	res, err := client.Do(req)
+
+	resp, err := c.client.Do(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer res.Body.Close()
-
-	t := &oauthToken{}
-
-	decoder := json.NewDecoder(res.Body)
-	err = decoder.Decode(t)
-	if err != nil {
-		return err
-	}
-
-	c.token = *t
-
-	return nil
-}
-*/
-
-// Request follower list code
-/*
-	client := http.Client{}
-
-	req, err := http.NewRequest("GET", "https://api.twitch.tv/helix/streams/followed?user_id=104328365", nil)
-	if err != nil {
-		panic(err)
-	}
-
-	req.Header = http.Header{
-		"Authorization": {fmt.Sprintf("Bearer %s", userToken)},
-		"Client-Id":     {clientID},
-	}
-
-	res, err := client.Do(req)
-	if err != nil {
-		panic(err)
-	}
-	defer res.Body.Close()
+	defer resp.Body.Close()
 
 	followerList := Following{}
 
-	err = json.NewDecoder(res.Body).Decode(&followerList)
+	err = json.NewDecoder(resp.Body).Decode(&followerList)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 
-	for _, item := range followerList.Data {
-		fmt.Printf("%s is playing %s to %d viewers\n", item.UserName, item.GameName, item.ViewerCount)
-		fmt.Printf("Title: %s\n", item.Title)
-		fmt.Printf("Link to stream: https://twitch.tv/%s\n", item.UserLogin)
-		fmt.Println()
-		fmt.Println("----------------------------------------------------------------")
-		fmt.Println()
-	}
-*/
+	return &followerList, nil
+}
